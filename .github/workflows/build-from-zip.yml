@@ -1,1 +1,77 @@
+name: Build APK from ZIP
 
+# Repo mein ZIP upload (push) karte hi APK khud ban jati hai.
+# Manual run bhi chalta hai: Actions > Build APK from ZIP > Run workflow.
+on:
+  push:
+    paths:
+      - '**.zip'
+      - '**.ZIP'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Find and extract ZIP
+        run: |
+          ZIP=""
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
+            ZIP=$(git diff --name-only --diff-filter=AM HEAD^ HEAD | grep -i '\.zip$' | head -n1 || true)
+          fi
+          if [ -z "$ZIP" ]; then
+            ZIP=$(git ls-files | grep -i '\.zip$' | head -n1 || true)
+          fi
+          if [ -z "$ZIP" ]; then
+            echo "::error::Repository mein koi .zip file nahi mili"
+            exit 1
+          fi
+          echo "Using ZIP: $ZIP"
+          mkdir -p "$RUNNER_TEMP/proj"
+          unzip -q -o "$ZIP" -d "$RUNNER_TEMP/proj"
+          SETTINGS=$(find "$RUNNER_TEMP/proj" -name 'settings.gradle*' -not -path '*/__MACOSX/*' | head -n1)
+          if [ -z "$SETTINGS" ]; then
+            echo "::error::ZIP ke andar settings.gradle.kts nahi mili. Poora project ZIP karein."
+            exit 1
+          fi
+          PROJECT_ROOT=$(dirname "$SETTINGS")
+          echo "Project root: $PROJECT_ROOT"
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build debug APK
+        run: |
+          cd "$PROJECT_ROOT"
+          gradle assembleDebug --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/PMS-PakStudies.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PMS-PakStudies-APK
+          path: PMS-PakStudies.apk
+
+      - name: Publish to Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: APK build ${{ github.run_number }}
+          files: PMS-PakStudies.apk
